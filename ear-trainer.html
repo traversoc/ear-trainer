@@ -271,7 +271,6 @@
   .radio-row label { margin-right: 14px; cursor: pointer; }
   .note { font-size: 11px; color: #404040; }
 
-  /* Custom bands */
   .band-check-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
@@ -286,13 +285,29 @@
     align-items: center;
     gap: 4px;
   }
-  .band-check-grid input[type=checkbox] {
-    margin: 0;
+  .band-check-grid input[type=checkbox] { margin: 0; }
+  .band-count { font-family: "Courier New", monospace; font-size: 11px; color: #000080; }
+
+  .manual-type-btn {
+    background: #C0C0C0;
+    border-top: 2px solid #fff;
+    border-left: 2px solid #fff;
+    border-right: 2px solid #404040;
+    border-bottom: 2px solid #404040;
+    padding: 4px 18px;
+    font-size: 12px;
+    font-weight: bold;
+    cursor: pointer;
+    margin-right: 6px;
+    color: #000;
   }
-  .band-count {
-    font-family: "Courier New", monospace;
-    font-size: 11px;
-    color: #000080;
+  .manual-type-btn.selected {
+    border-top: 2px solid #404040;
+    border-left: 2px solid #404040;
+    border-right: 2px solid #fff;
+    border-bottom: 2px solid #fff;
+    background: #000080;
+    color: #fff;
   }
 </style>
 </head>
@@ -335,8 +350,8 @@
 
       <div class="row radio-row">
         <b>Frequency Mode:</b><br>
-        <label><input type="radio" name="freqmode" value="standard" checked> Standard (9 bands, with vowels)</label><br>
-        <label><input type="radio" name="freqmode" value="advanced"> Advanced (19 bands, no hints)</label><br>
+        <label><input type="radio" name="freqmode" value="standard" checked> Standard (9 bands)</label><br>
+        <label><input type="radio" name="freqmode" value="advanced"> Advanced (19 bands)</label><br>
         <label><input type="radio" name="freqmode" value="custom"> Custom (pick your own bands)</label>
       </div>
 
@@ -350,11 +365,11 @@
       </div>
 
       <div class="row note" id="modeNote">
-        Standard mode uses 9 key bands with vowel hints on reveal.
+        Standard mode uses 9 key bands.
       </div>
     </fieldset>
 
-    <!-- CUSTOM BANDS (hidden by default) -->
+    <!-- CUSTOM BANDS -->
     <fieldset id="customBandsPanel" style="display:none;">
       <legend>2b. Custom Bands</legend>
       <div class="row note">
@@ -384,9 +399,23 @@
       </div>
     </fieldset>
 
+    <!-- MANUAL BAND PICKER -->
+    <fieldset>
+      <legend>4. Manual Band Picker</legend>
+      <div class="row note">
+        Pick a type, then click any band to apply instantly. Great for drilling one frequency.
+      </div>
+      <div class="row" style="margin-bottom:6px;">
+        <b>Type:</b>
+        <button class="manual-type-btn selected" data-type="boost">+ Boost</button>
+        <button class="manual-type-btn" data-type="cut">&minus; Cut</button>
+      </div>
+      <div class="freq-grid" id="manualPickerGrid"></div>
+    </fieldset>
+
     <!-- QUIZ -->
     <fieldset id="quizPanel" style="display:none;">
-      <legend>4. Quiz</legend>
+      <legend>5. Quiz</legend>
 
       <div class="row"><b>Pick the frequency:</b></div>
       <div class="freq-grid" id="freqGrid"></div>
@@ -407,7 +436,7 @@
 
     <!-- TRANSPORT -->
     <fieldset>
-      <legend>5. Transport</legend>
+      <legend>6. Transport</legend>
       <div class="transport">
         <button id="playPauseBtn" disabled>Play</button>
         <button id="resetBtn" disabled>Reset</button>
@@ -428,7 +457,6 @@
 (function(){
   "use strict";
 
-  // ---- Full pool of frequencies ----
   const FREQ_POOL = [
     { freq: 40,    label: '40'   },
     { freq: 63,    label: '63'   },
@@ -452,13 +480,9 @@
     { freq: 16000, label: '16k'  }
   ];
 
-  // Standard preset (9 bands, per spec)
   const STANDARD_FREQ_NUMBERS = [63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
-
-  // Advanced preset (19 bands)
   const ADVANCED_FREQ_NUMBERS = [40, 63, 100, 160, 250, 400, 500, 630, 800, 1000, 1600, 2000, 2500, 4000, 5000, 6300, 8000, 10000, 16000];
 
-  // ---- DOM refs ----
   const dropZone = document.getElementById('dropZone');
   const fileInput = document.getElementById('file-input');
   const fileInfoText = document.getElementById('fileInfoText');
@@ -484,6 +508,9 @@
   const randomizeBtn = document.getElementById('randomizeBtn');
   const resetEffectBtn = document.getElementById('resetEffectBtn');
 
+  const manualPickerGrid = document.getElementById('manualPickerGrid');
+  const manualTypeBtns = document.querySelectorAll('.manual-type-btn');
+
   const quizPanel = document.getElementById('quizPanel');
   const freqGrid = document.getElementById('freqGrid');
   const typeBtns = document.querySelectorAll('.type-btn');
@@ -498,7 +525,6 @@
   const seekSlider = document.getElementById('seekSlider');
   const timeDisplay = document.getElementById('timeDisplay');
 
-  // ---- State ----
   let audioCtx = null;
   let audioBuffer = null;
   let sourceNode = null;
@@ -511,13 +537,14 @@
   let fileLoaded = false;
   let animFrameId = null;
 
-  let currentMode = 'standard'; // 'standard' | 'advanced' | 'custom'
+  let currentMode = 'standard';
   let currentEffect = { frequency: 0, gain: 0, Q: 1.5 };
   let effectActive = true;
   let gainCompensation = 0;
 
-  // Custom selection - all by default
   let customSelected = new Set(FREQ_POOL.map(f => f.freq));
+
+  let manualType = 'boost';
 
   let quizMode = false;
   let pendingEffect = null;
@@ -552,7 +579,7 @@
     return currentMode === 'standard' || currentMode === 'custom';
   }
 
-  // ---- Build custom band checkboxes ----
+  // ---- Custom band checkboxes ----
   function buildBandCheckboxes() {
     bandCheckGrid.innerHTML = '';
     FREQ_POOL.forEach(info => {
@@ -567,6 +594,7 @@
         updateBandCount();
         if (currentMode === 'custom') {
           buildFreqGrid();
+          buildManualPicker();
           updateRandomizeState();
         }
       });
@@ -601,7 +629,84 @@
     });
   }
 
-  // ---- Type buttons ----
+  // ---- Build manual picker grid ----
+  function buildManualPicker() {
+    manualPickerGrid.innerHTML = '';
+    const freqs = getActiveFreqs();
+    freqs.forEach(info => {
+      if (!info) return;
+      const btn = document.createElement('button');
+      btn.className = 'freq-btn';
+      btn.dataset.freq = info.freq;
+      btn.textContent = info.label;
+      btn.addEventListener('click', () => applyManualBand(info.freq));
+      manualPickerGrid.appendChild(btn);
+    });
+  }
+
+  // ---- Apply manual band ----
+  function applyManualBand(freq) {
+    if (!audioCtx || !filterNode || !audioBuffer) {
+      quizStatus.textContent = 'Load an audio file first.';
+      return;
+    }
+
+    const gain = manualType === 'boost' ? 12 : -12;
+    const Q = 1.5;
+
+    filterNode.type = 'peaking';
+    filterNode.frequency.value = freq;
+    filterNode.gain.value = gain;
+    filterNode.Q.value = Q;
+    effectActive = true;
+    abToggle.checked = true;
+
+    const comp = -gain * 0.45;
+    gainCompensation = comp;
+    if (gainNode) gainNode.gain.value = Math.pow(10, comp / 20);
+
+    currentEffect = { frequency: freq, gain: gain, Q: Q };
+
+    // Clear any pending quiz state
+    pendingEffect = null;
+    isAnswered = false;
+    selectedFreq = null;
+    selectedType = null;
+    submitGuessBtn.disabled = true;
+    quizResultArea.innerHTML = '';
+    document.querySelectorAll('.freq-btn').forEach(b => b.className = 'freq-btn');
+    typeBtns.forEach(b => b.className = 'type-btn');
+
+    // Show the answer
+    const info = getFreqInfo(freq);
+    const sign = gain > 0 ? '+' : '';
+    eqValueDisplay.innerHTML = '<span class="big">' + sign + gain.toFixed(1) + ' dB @ ' + formatFreq(freq) + ' Hz</span>';
+    eqDetail.textContent = 'Q = ' + Q.toFixed(1) + ' | effect ON';
+    if (showVowels() && info.vowel) {
+      eqDesc.textContent = 'Vowel hint: "' + info.vowel + '"';
+    } else {
+      eqDesc.textContent = '';
+    }
+
+    quizStatus.textContent = 'Manual: ' + (manualType === 'boost' ? 'boosted' : 'cut') + ' ' + formatFreq(freq) + ' Hz.';
+
+    // Highlight the clicked band
+    document.querySelectorAll('#manualPickerGrid .freq-btn').forEach(b => {
+      if (parseFloat(b.dataset.freq) === freq) b.classList.add('selected');
+      else b.classList.remove('selected');
+    });
+  }
+
+  // ---- Manual type buttons ----
+  manualTypeBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      manualTypeBtns.forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      manualType = btn.dataset.type;
+    });
+  });
+
+  // ---- Type buttons (quiz) ----
   typeBtns.forEach(btn => {
     btn.addEventListener('click', () => {
       if (isAnswered || !pendingEffect || !quizMode) return;
@@ -677,6 +782,9 @@
 
     currentEffect = { frequency: freq, gain: gain, Q: Q };
 
+    // Clear manual picker selection
+    document.querySelectorAll('#manualPickerGrid .freq-btn').forEach(b => b.classList.remove('selected'));
+
     if (quizMode) {
       pendingEffect = { frequency: freq, gain: gain, Q: Q };
       isAnswered = false;
@@ -685,7 +793,10 @@
       submitGuessBtn.disabled = true;
       quizResultArea.innerHTML = '';
       quizStatus.textContent = 'New challenge. Guess the frequency and type.';
-      document.querySelectorAll('.freq-btn').forEach(b => b.className = 'freq-btn');
+      document.querySelectorAll('.freq-btn').forEach(b => {
+        // preserve manual picker highlight reset
+        b.classList.remove('correct-guess', 'wrong-guess', 'selected');
+      });
       typeBtns.forEach(b => b.className = 'type-btn');
       renderEqDisplay(0, 0, false, true);
       eqDesc.textContent = '';
@@ -729,7 +840,9 @@
     selectedType = null;
     submitGuessBtn.disabled = true;
     quizResultArea.innerHTML = '';
-    document.querySelectorAll('.freq-btn').forEach(b => b.className = 'freq-btn');
+    document.querySelectorAll('.freq-btn').forEach(b => {
+      b.classList.remove('selected', 'correct-guess', 'wrong-guess');
+    });
     typeBtns.forEach(b => b.className = 'type-btn');
     renderEqDisplay(0, 0, false, false);
   }
@@ -749,7 +862,7 @@
     if (ok) score.correct++;
     scoreDisplay.textContent = 'Score: ' + score.correct + ' / ' + score.total;
 
-    document.querySelectorAll('.freq-btn').forEach(b => {
+    document.querySelectorAll('#freqGrid .freq-btn').forEach(b => {
       const f = parseFloat(b.dataset.freq);
       if (f === correctFreq) b.classList.add('correct-guess');
       else if (f === selectedFreq && !freqOk) b.classList.add('wrong-guess');
@@ -786,7 +899,7 @@
     const correctFreq = pendingEffect.frequency;
     const correctType = pendingEffect.gain > 0 ? 'boost' : 'cut';
 
-    document.querySelectorAll('.freq-btn').forEach(b => {
+    document.querySelectorAll('#freqGrid .freq-btn').forEach(b => {
       if (parseFloat(b.dataset.freq) === correctFreq) b.classList.add('correct-guess');
     });
     typeBtns.forEach(b => {
@@ -976,7 +1089,6 @@
         filterNode.connect(gainNode);
 
         fileLoaded = true;
-        // Enable transport and structural buttons
         resetEffectBtn.disabled = false;
         playPauseBtn.disabled = false;
         resetBtn.disabled = false;
@@ -1046,36 +1158,35 @@
     if (!quizMode) resetEffect();
   });
 
-  // Frequency mode radios
   freqModeRadios.forEach(r => {
     r.addEventListener('change', () => {
       if (!r.checked) return;
       currentMode = r.value;
 
-      // Show/hide custom bands panel
       customBandsPanel.style.display = (currentMode === 'custom') ? 'block' : 'none';
 
       if (currentMode === 'standard') {
-        modeNote.textContent = 'Standard mode uses 9 key bands (63 Hz to 16 kHz) with vowel hints on reveal.';
+        modeNote.textContent = 'Standard mode uses 9 key bands (63 Hz to 16 kHz).';
       } else if (currentMode === 'advanced') {
-        modeNote.textContent = 'Advanced mode uses 19 bands (40 Hz to 16 kHz). No hints shown.';
+        modeNote.textContent = 'Advanced mode uses 19 bands (40 Hz to 16 kHz)..';
       } else {
-        modeNote.textContent = 'Custom mode: choose which bands appear. Vowel hints shown for bands that have them.';
+        modeNote.textContent = 'Custom mode: choose which bands appear.';
       }
 
       buildFreqGrid();
+      buildManualPicker();
       resetEffect();
       updateRandomizeState();
       quizStatus.textContent = 'Mode set to ' + currentMode + '. Press New Challenge.';
     });
   });
 
-  // Custom bands buttons
   selectAllBands.addEventListener('click', () => {
     FREQ_POOL.forEach(f => customSelected.add(f.freq));
     buildBandCheckboxes();
     if (currentMode === 'custom') {
       buildFreqGrid();
+      buildManualPicker();
       updateRandomizeState();
     }
   });
@@ -1084,6 +1195,7 @@
     buildBandCheckboxes();
     if (currentMode === 'custom') {
       buildFreqGrid();
+      buildManualPicker();
       updateRandomizeState();
     }
   });
@@ -1092,6 +1204,7 @@
     buildBandCheckboxes();
     if (currentMode === 'custom') {
       buildFreqGrid();
+      buildManualPicker();
       updateRandomizeState();
     }
   });
@@ -1113,12 +1226,13 @@
   // ---- Init ----
   buildBandCheckboxes();
   buildFreqGrid();
+  buildManualPicker();
   resetEffect();
   quizPanel.style.display = 'none';
   customBandsPanel.style.display = 'none';
   document.querySelectorAll('button').forEach(b => b.disabled = true);
   seekSlider.disabled = true;
-  console.log('EQ Ear Trainer (with custom bands) loaded.');
+  console.log('EQ Ear Trainer (with manual picker) loaded.');
 })();
 </script>
 </body>
